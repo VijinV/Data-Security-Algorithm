@@ -1,0 +1,17 @@
+
+# Core Cryptography & Security
+pycryptodome>=3.18.0
+
+# Testing Framework
+pytest>=7.4.0
+
+# Mathematical & Numerical Operations
+numpy>=1.24.0
+
+# Visualization & Plotting (Phase 4 Security & Evaluation Benchmarks)
+matplotlib>=3.7.0
+
+# API / Web Backend (Phase 5 Cloud Integration)
+fastapi>=0.100.0
+uvicorn>=0.22.0
+python-multipart>=0.0.6

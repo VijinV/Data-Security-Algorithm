@@ -24,9 +24,9 @@ A build-ready breakdown of the execution plan, structured so the team can start 
 
 **Goal:** a standalone, tested Python module that encrypts/decrypts binary data using XOR, XNOR, and bit-shift — no genetics layer yet.
 
-- [ ] Implement CSPRNG key generation (`secrets.token_bytes`)
-- [ ] Implement block splitting with PKCS#7-style padding (fixed block size, e.g. 16 bytes)
-- [ ] Implement key scheduling / subkey derivation per block
+- [x] Implement CSPRNG key generation (`secrets.token_bytes`)
+- [x] Implement block splitting with PKCS#7-style padding (fixed block size, e.g. 16 bytes)
+- [x] Implement key scheduling / subkey derivation per block
 - [ ] Implement `xor_block(block, subkey)`
 - [ ] Implement `xnor_block(block, mask)`
 - [ ] Implement `bit_shift(block, amount)` (amount derived from subkey)

@@ -33,7 +33,7 @@ A build-ready breakdown of the execution plan, structured so the team can start 
 - [x] Chain into `layer1_encrypt(plaintext_bytes, key) -> ciphertext_bytes`
 - [x] Implement exact reverse: `layer1_decrypt(ciphertext_bytes, key) -> plaintext_bytes`
 - [x] Write `pytest` unit tests: round-trip test (`decrypt(encrypt(x)) == x`) on at least 20 varied inputs (empty string, 1 byte, exactly 1 block, multi-block, random binary data)
-- [ ] Commit with a short `layer1/README.md` explaining the block/key format
+- [x] Commit with a short `layer1/README.md` explaining the block/key format
 
 **Owner:** Adheena S.
 **Exit criterion:** `pytest tests/test_layer1.py` passes 100% on all round-trip test vectors.

@@ -611,7 +611,270 @@ def test_full_layer1_roundtrip_chaining():
         assert r2 == s1
         decrypted_block = xor_block(r2, subkey)
 
+
         assert decrypted_block == original_block
 
 
+# =====================================================================
+# layer1_encrypt / layer1_decrypt Round-Trip Tests
+# =====================================================================
+# The spec requires decrypt(encrypt(x)) == x on at least 20 varied
+# inputs covering: empty, 1-byte, exactly-1-block, multi-block, and
+# random binary data.  Additional edge cases are included for robustness.
 
+import os
+import random
+import string as _string
+
+from layer1 import layer1_encrypt, layer1_decrypt
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _random_bytes(n: int) -> bytes:
+    """Return n cryptographically random bytes."""
+    return os.urandom(n)
+
+
+def _fixed_key(length: int = 32) -> bytes:
+    """Return a deterministic all-0x5A key for reproducible tests."""
+    return bytes([0x5A] * length)
+
+
+# ---------------------------------------------------------------------------
+# 1. Parametrized happy-path round-trip (covering the >= 20 input requirement)
+# ---------------------------------------------------------------------------
+
+# Each entry: (label, plaintext_bytes)
+_ROUND_TRIP_VECTORS = [
+    # --- edge: empty input ---
+    ("empty",              b""),
+
+    # --- edge: single byte ---
+    ("1_byte_zero",        b"\x00"),
+    ("1_byte_one",         b"\x01"),
+    ("1_byte_max",         b"\xff"),
+    ("1_byte_mid",         b"\x7f"),
+
+    # --- exactly 1 block (16 bytes) -> triggers a full padding block ---
+    ("exact_1_block_zeros",   b"\x00" * 16),
+    ("exact_1_block_ones",    b"\xff" * 16),
+    ("exact_1_block_ascii",   b"1234567890ABCDEF"),
+    ("exact_1_block_pattern", bytes(range(16))),
+
+    # --- just under / just over block boundary ---
+    ("15_bytes",           b"A" * 15),
+    ("17_bytes",           b"B" * 17),
+    ("31_bytes",           b"C" * 31),
+    ("32_bytes",           b"D" * 32),
+    ("33_bytes",           b"E" * 33),
+
+    # --- multi-block text data ---
+    ("short_ascii",        b"Hello, HelixLock!"),
+    ("lorem_ipsum",        b"Lorem ipsum dolor sit amet, consectetur adipiscing elit."),
+    ("unicode_utf8",       "\u03b1\u03b2\u03b3 HelixLock secure".encode("utf-8")),
+
+    # --- all-zero and all-one large blocks ---
+    ("100_zero_bytes",     b"\x00" * 100),
+    ("100_ff_bytes",       b"\xff" * 100),
+
+    # --- alternating pattern ---
+    ("alternating_aa_55",  (b"\xaa\x55") * 50),
+
+    # --- exactly 20 x block size ---
+    ("20_blocks_exact",    bytes(range(256)) * 5),
+
+    # --- random binary blobs (deterministic seed for reproducibility) ---
+    ("random_1_byte",      bytes([random.Random(1).randint(0, 255)])),
+    ("random_16_bytes",    bytes(random.Random(2).getrandbits(8) for _ in range(16))),
+    ("random_100_bytes",   bytes(random.Random(3).getrandbits(8) for _ in range(100))),
+    ("random_500_bytes",   bytes(random.Random(4).getrandbits(8) for _ in range(500))),
+    ("random_1000_bytes",  bytes(random.Random(5).getrandbits(8) for _ in range(1000))),
+
+    # --- printable ASCII only ---
+    ("printable_ascii",    _string.printable.encode("ascii")),
+
+    # --- binary file-like header magic bytes ---
+    ("png_magic",          b"\x89PNG\r\n\x1a\n" + b"\x00" * 24),
+    ("pdf_magic",          b"%PDF-1.7\n" + b"\x00" * 23),
+    ("zip_magic",          b"PK\x03\x04" + b"\x00" * 28),
+
+    # --- null bytes interleaved ---
+    ("null_interleaved",   b"\x00data\x00here\x00" * 8),
+
+    # --- high-entropy repeated key-like data ---
+    ("high_entropy_256",   bytes(range(256))),
+]
+
+
+@pytest.mark.parametrize(
+    "label,plaintext",
+    _ROUND_TRIP_VECTORS,
+    ids=[v[0] for v in _ROUND_TRIP_VECTORS],
+)
+def test_round_trip(label, plaintext):
+    """
+    decrypt(encrypt(x)) == x for every test vector.
+    Uses a fresh random key per test to maximise coverage of key-space paths.
+    """
+    key = generate_key(32)
+    ciphertext = layer1_encrypt(plaintext, key)
+    recovered  = layer1_decrypt(ciphertext, key)
+    assert recovered == plaintext, (
+        f"Round-trip failed for '{label}': "
+        f"expected {plaintext!r}, got {recovered!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 2. Ciphertext must differ from plaintext (encryption actually changes data)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "label,plaintext",
+    [v for v in _ROUND_TRIP_VECTORS if len(v[1]) > 0],
+    ids=[v[0] for v in _ROUND_TRIP_VECTORS if len(v[1]) > 0],
+)
+def test_encrypt_changes_data(label, plaintext):
+    """Ciphertext must not equal the plaintext (encryption must alter the data)."""
+    key = generate_key(32)
+    ciphertext = layer1_encrypt(plaintext, key)
+    # For non-empty inputs the ciphertext (which includes PKCS#7 padding)
+    # must differ from the original plaintext.
+    assert ciphertext != plaintext, (
+        f"Ciphertext is identical to plaintext for '{label}'"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 3. Key-sensitivity: wrong key must NOT recover the original plaintext
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "plaintext",
+    [
+        b"HelixLock key-sensitivity test!!",
+        b"\x00" * 32,
+        bytes(range(64)),
+        b"A" * 100,
+    ],
+    ids=["ascii_text", "zeros", "sequential", "repeated_A"],
+)
+def test_wrong_key_gives_garbage(plaintext):
+    """
+    Decrypting with a different key must not reproduce the original plaintext.
+    Confirms key-dependence matters end-to-end (required by Phase 3).
+    """
+    key_correct = generate_key(32)
+    key_wrong   = generate_key(32)
+    assert key_correct != key_wrong  # astronomically unlikely to collide
+
+    ciphertext = layer1_encrypt(plaintext, key_correct)
+    try:
+        recovered = layer1_decrypt(ciphertext, key_wrong)
+        # If decrypt does not raise (valid padding by fluke), data must differ
+        assert recovered != plaintext, (
+            "Wrong key accidentally produced the correct plaintext!"
+        )
+    except ValueError:
+        # PKCS#7 padding validation failed with wrong key -> expected garbage
+        pass
+
+
+# ---------------------------------------------------------------------------
+# 4. Determinism: same key + same plaintext -> same ciphertext every time
+# ---------------------------------------------------------------------------
+
+def test_encrypt_is_deterministic():
+    """Encrypting the same plaintext with the same key always gives the same output."""
+    key       = _fixed_key(32)
+    plaintext = b"Determinism check for HelixLock!"
+    ct1 = layer1_encrypt(plaintext, key)
+    ct2 = layer1_encrypt(plaintext, key)
+    assert ct1 == ct2
+
+
+# ---------------------------------------------------------------------------
+# 5. Ciphertext length is always a padded multiple of block_size
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "n_bytes",
+    [0, 1, 15, 16, 17, 31, 32, 33, 127, 128, 255, 256],
+)
+def test_ciphertext_length_is_block_aligned(n_bytes):
+    """Output length must always be a non-zero multiple of the block size (16 bytes)."""
+    key        = generate_key(32)
+    plaintext  = bytes(n_bytes)       # n_bytes zero bytes
+    ciphertext = layer1_encrypt(plaintext, key)
+    assert len(ciphertext) > 0
+    assert len(ciphertext) % 16 == 0
+
+
+# ---------------------------------------------------------------------------
+# 6. bytearray inputs are accepted transparently
+# ---------------------------------------------------------------------------
+
+def test_bytearray_inputs_accepted():
+    """Both plaintext and key may be provided as bytearray."""
+    key       = bytearray(generate_key(32))
+    plaintext = bytearray(b"bytearray input test!")
+    ct = layer1_encrypt(plaintext, key)
+    pt = layer1_decrypt(ct, key)
+    assert pt == bytes(plaintext)
+
+
+# ---------------------------------------------------------------------------
+# 7. Type / value error handling on encrypt and decrypt
+# ---------------------------------------------------------------------------
+
+def test_encrypt_invalid_inputs():
+    """layer1_encrypt must raise TypeError or ValueError on bad arguments."""
+    key = generate_key(32)
+    with pytest.raises(TypeError):
+        layer1_encrypt("string plaintext", key)
+    with pytest.raises(TypeError):
+        layer1_encrypt(b"valid", "string key")
+    with pytest.raises(TypeError):
+        layer1_encrypt(b"valid", 12345)
+    with pytest.raises(ValueError):
+        layer1_encrypt(b"valid", b"")   # empty key
+
+
+def test_decrypt_invalid_inputs():
+    """layer1_decrypt must raise TypeError or ValueError on bad arguments."""
+    key = generate_key(32)
+    with pytest.raises(TypeError):
+        layer1_decrypt("not bytes", key)
+    with pytest.raises(TypeError):
+        layer1_decrypt(b"\x00" * 16, "string key")
+    with pytest.raises(ValueError):
+        layer1_decrypt(b"\x00" * 16, b"")   # empty key
+    with pytest.raises(ValueError):
+        layer1_decrypt(b"\x00" * 15, key)   # not block-aligned
+
+
+# ---------------------------------------------------------------------------
+# 8. Large random payload (stress / performance sanity)
+# ---------------------------------------------------------------------------
+
+def test_round_trip_large_random_payload():
+    """Round-trip a 1 MB random payload to confirm correctness at scale."""
+    key        = generate_key(32)
+    plaintext  = _random_bytes(1024 * 1024)   # 1 MB
+    ciphertext = layer1_encrypt(plaintext, key)
+    recovered  = layer1_decrypt(ciphertext, key)
+    assert recovered == plaintext
+
+
+# ---------------------------------------------------------------------------
+# 9. Public API: layer1_encrypt / layer1_decrypt importable at package root
+# ---------------------------------------------------------------------------
+
+def test_public_api_imports():
+    """layer1_encrypt and layer1_decrypt must be importable from the layer1 package."""
+    from layer1 import layer1_encrypt as enc, layer1_decrypt as dec  # noqa: F401
+    assert callable(enc)
+    assert callable(dec)

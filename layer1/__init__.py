@@ -11,6 +11,7 @@ from .key_schedule import (
     KeySchedule,
 )
 from .operations import xor_block, xnor_block, bit_shift, reverse_bit_shift
+from .cipher import layer1_encrypt, layer1_decrypt
 
 __all__ = [
     "generate_key",
@@ -29,4 +30,6 @@ __all__ = [
     "xnor_block",
     "bit_shift",
     "reverse_bit_shift",
+    "layer1_encrypt",
+    "layer1_decrypt",
 ]

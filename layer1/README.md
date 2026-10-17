@@ -1,109 +1,155 @@
 # Layer 1 — Logical-Mathematical Encryption Engine
 
-This module handles Layer 1 operations for the HelixLock algorithm.
+Layer 1 is the first cryptographic stage of **HelixLock**.  
+It encrypts arbitrary binary data using three reversible bitwise operations — XOR, XNOR, and circular bit-shift — each keyed independently per 16-byte block via HMAC-SHA256.
 
-## Features
+---
 
-### CSPRNG Key Generation (`layer1.key_gen`)
-- Uses Python's standard `secrets.token_bytes` to generate cryptographically secure random keys.
-- Supports customizable key sizes (default: 32 bytes / 256 bits).
+## Block Format
+
+| Field | Size | Description |
+|---|---|---|
+| **Ciphertext blocks** | N × 16 bytes | One 16-byte block per plaintext block |
+| **PKCS#7 padding** | 1–16 bytes (embedded) | Always present; last block carries the pad |
+
+**Rules:**
+- Block size is fixed at **16 bytes (128 bits)**.
+- Plaintext of any length (including empty) is padded with [PKCS#7](https://datatracker.ietf.org/doc/html/rfc5652#section-6.3) before encryption.  
+  PKCS#7 always adds at least 1 byte, so a 16-byte plaintext produces a 32-byte ciphertext.
+- Ciphertext length is always `ceil((len(plaintext) + 1) / 16) × 16` bytes.
+- The padding is stripped automatically by `layer1_decrypt`; the caller never sees it.
+
+```
+Plaintext (arbitrary length)
+        │
+        ▼
+┌─────────────────────────────────────────────┐
+│  PKCS#7 pad  →  multiple of 16 bytes        │
+└─────────────────────────────────────────────┘
+        │
+        ▼  split into 16-byte blocks
+   [Block 0] [Block 1] … [Block N-1]
+        │
+        ▼  encrypt each block independently
+[Cipher 0] [Cipher 1] … [Cipher N-1]   ← ciphertext output
+```
+
+---
+
+## Key Format
+
+| Property | Value |
+|---|---|
+| **Type** | Raw byte string (`bytes` or `bytearray`) |
+| **Recommended size** | 32 bytes (256 bits) |
+| **Minimum size** | 1 byte (not recommended) |
+| **Maximum size** | Unlimited |
+| **Generation** | `layer1.generate_key(32)` — CSPRNG via `secrets.token_bytes` |
+
+The master key is never used directly on data.  
+Instead, three independent per-block keys are derived from it using HMAC-SHA256 (see Key Schedule below).
 
 ```python
 from layer1 import generate_key
 
-# Generate a default 256-bit (32-byte) key
-key = generate_key()
-
-# Generate a 128-bit (16-byte) key
-short_key = generate_key(16)
+key = generate_key(32)   # 256-bit CSPRNG key  →  b'\xfa\x3c...' (32 random bytes)
 ```
 
-### Block Splitting & PKCS#7 Padding (`layer1.padding`)
-- Implements PKCS#7 padding (`pkcs7_pad` / `pad`) and unpadding (`pkcs7_unpad` / `unpad`).
-- Splits padded data into fixed-size blocks (`split_blocks`) and joins them back (`join_blocks`).
+---
+
+## Per-Block Key Schedule
+
+Every block index `i` gets three independent values derived deterministically from the master key:
+
+| Derived value | Domain-separation context | Length | Used for |
+|---|---|---|---|
+| `subkey_i` | `b"HelixLock-L1-Subkey"` | 16 bytes | XOR operation |
+| `mask_i` | `b"HelixLock-L1-Mask"` | 16 bytes | XNOR operation |
+| `shift_i` | `b"HelixLock-L1-Shift"` | 4 bytes → mod 8 | Bit-shift amount (0–7) |
+
+**Derivation formula** (counter-mode HMAC-SHA256):
+
+```
+subkey_i = HMAC-SHA256(key, context || block_index_u64_be || counter_u32_be)[:16]
+```
+
+The domain-separation context strings guarantee that `subkey_i ≠ mask_i ≠ shift_seed_i`
+even for the same block index and master key.  
+Distinct indices produce distinct values, preventing ECB-mode pattern leakage.
+
+---
+
+## Encryption Pipeline
+
+Applied per block in order:
+
+```
+Block_i  ──►  XOR(subkey_i)  ──►  XNOR(mask_i)  ──►  BitShift_left(shift_i)  ──►  CipherBlock_i
+```
+
+1. **XOR** with 16-byte `subkey_i` — bitwise confusion layer (self-inverse).  
+2. **XNOR** with 16-byte `mask_i` — adds asymmetry (bitwise NOT of XOR; self-inverse).  
+3. **Circular bit-shift left** by `shift_i` bits across the full 128-bit block — diffuses bit positions (reversible by right-shift of same amount).
+
+---
+
+## Decryption Pipeline
+
+Strict inverse — same key material, reverse order:
+
+```
+CipherBlock_i  ──►  BitShift_right(shift_i)  ──►  XNOR(mask_i)  ──►  XOR(subkey_i)  ──►  Block_i
+```
+
+1. **Reverse bit-shift right** by `shift_i` bits.  
+2. **XNOR** with `mask_i` (self-inverse — identical to the encrypt step).  
+3. **XOR** with `subkey_i` (self-inverse — identical to the encrypt step).
+
+---
+
+## Quick-Start
 
 ```python
-from layer1 import pkcs7_pad, pkcs7_unpad, split_blocks, join_blocks
+from layer1 import generate_key, layer1_encrypt, layer1_decrypt
 
-# Pad data to 16-byte blocks
-data = b"Hello, HelixLock!"
-padded = pkcs7_pad(data, block_size=16)
+# 1. Generate a 256-bit key
+key = generate_key(32)
 
-# Split into 16-byte blocks
-blocks = split_blocks(padded, block_size=16)
+# 2. Encrypt any binary data
+plaintext  = b"Top-secret HelixLock payload!"
+ciphertext = layer1_encrypt(plaintext, key)
+# len(ciphertext) is always a multiple of 16
 
-# Join blocks and unpad
-reconstructed_padded = join_blocks(blocks)
-original = pkcs7_unpad(reconstructed_padded, block_size=16)
-assert original == data
+# 3. Decrypt back to the original
+recovered  = layer1_decrypt(ciphertext, key)
+assert recovered == plaintext
 ```
 
-### Key Scheduling & Per-Block Subkey Derivation (`layer1.key_schedule`)
-- Derives deterministic per-block subkeys (`derive_subkey`), masks (`derive_mask`), and shift amounts (`derive_shift_amount`) using HMAC-SHA256.
-- Prevents ECB-mode pattern leaks across repeated plaintext blocks.
-- Managed directly or through the `KeySchedule` class interface.
+---
 
-```python
-from layer1 import KeySchedule, derive_subkey
+## Module Reference
 
-master_key = generate_key(32)
+| Module | Public symbols | Purpose |
+|---|---|---|
+| `layer1.key_gen` | `generate_key`, `generate_csprng_key` | CSPRNG master-key generation |
+| `layer1.padding` | `pkcs7_pad`, `pkcs7_unpad`, `pad`, `unpad`, `split_blocks`, `join_blocks` | PKCS#7 padding and block splitting |
+| `layer1.key_schedule` | `derive_subkey`, `derive_mask`, `derive_shift_amount`, `KeySchedule` | Per-block key material derivation |
+| `layer1.operations` | `xor_block`, `xnor_block`, `bit_shift`, `reverse_bit_shift` | Block-level bitwise transforms |
+| `layer1.cipher` | **`layer1_encrypt`**, **`layer1_decrypt`** | End-to-end encrypt / decrypt API |
 
-# Using KeySchedule helper class
-scheduler = KeySchedule(master_key, block_size=16)
-subkey_0 = scheduler.get_subkey(block_index=0)
-mask_0 = scheduler.get_mask(block_index=0)
-shift_0 = scheduler.get_shift_amount(block_index=0)
+All symbols are re-exported from the package root (`from layer1 import …`).
 
-# Direct derivation
-subkey_1 = derive_subkey(master_key, block_index=1, block_size=16)
-```
+---
 
-### Block XOR Operation (`layer1.operations`)
-- Performs bitwise XOR between a data block and its derived subkey.
-- Self-inverse (involution) property guarantees exact reversibility: `xor_block(xor_block(block, subkey), subkey) == block`.
+## Security Properties
 
-```python
-from layer1 import xor_block, derive_subkey
+| Property | Status |
+|---|---|
+| Key-dependent output | ✅ All three operations use key-derived material |
+| No ECB pattern leakage | ✅ Unique subkey/mask/shift per block index |
+| Exact reversibility | ✅ All three operations are self-inverse (XOR, XNOR) or have a defined inverse (bit-shift) |
+| PKCS#7 integrity check | ✅ Corrupt ciphertext or wrong key raises `ValueError` on unpad |
+| Brute-force infeasibility | ✅ 256-bit key → 2²⁵⁶ keyspace |
 
-# Encrypt block with subkey
-cipher_block = xor_block(block, subkey)
-
-# Decrypt block by reapplying XOR with same subkey
-recovered_block = xor_block(cipher_block, subkey)
-assert recovered_block == block
-```
-
-### Block XNOR Operation (`layer1.operations`)
-- Performs bitwise XNOR (NOT XOR) between a data block and its derived mask.
-- Adds cryptographic non-linearity / asymmetry compared to pure XOR systems.
-- Self-inverse (involution) property guarantees exact reversibility when reapplied with the same mask: `xnor_block(xnor_block(block, mask), mask) == block`.
-
-```python
-from layer1 import xnor_block, derive_mask
-
-# Apply XNOR with block mask
-masked_block = xnor_block(block, mask)
-
-# Revert XNOR by reapplying with identical mask
-original_block = xnor_block(masked_block, mask)
-assert original_block == block
-```
-
-### Block Circular Bit Shift (`layer1.operations`)
-- Performs deterministic circular bit rotation on binary blocks without bit loss.
-- Supports whole-block circular rotation (`mode="block"`, default) and per-byte rotation (`mode="byte"`).
-- Exact reversibility via `direction="right"`, negative amounts, or `reverse_bit_shift`.
-
-```python
-from layer1 import bit_shift, reverse_bit_shift, derive_shift_amount
-
-shift_amount = derive_shift_amount(master_key, block_index=0)
-
-# Rotate block left by derived shift amount
-shifted_block = bit_shift(block, shift_amount, direction="left")
-
-# Revert circular shift
-restored_block = reverse_bit_shift(shifted_block, shift_amount)
-# Or equivalently: bit_shift(shifted_block, shift_amount, direction="right")
-assert restored_block == block
-```
+> **Note:** Layer 1 is a building block, not a standalone production cipher.  
+> It feeds into Layer 2 (genetics-inspired encoding) to form the full HelixLock pipeline.

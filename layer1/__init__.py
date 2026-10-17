@@ -10,6 +10,7 @@ from .key_schedule import (
     derive_shift_amount,
     KeySchedule,
 )
+from .operations import xor_block, xnor_block, bit_shift, reverse_bit_shift
 
 __all__ = [
     "generate_key",
@@ -24,4 +25,8 @@ __all__ = [
     "derive_mask",
     "derive_shift_amount",
     "KeySchedule",
+    "xor_block",
+    "xnor_block",
+    "bit_shift",
+    "reverse_bit_shift",
 ]

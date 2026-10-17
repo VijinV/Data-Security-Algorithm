@@ -27,9 +27,9 @@ A build-ready breakdown of the execution plan, structured so the team can start 
 - [x] Implement CSPRNG key generation (`secrets.token_bytes`)
 - [x] Implement block splitting with PKCS#7-style padding (fixed block size, e.g. 16 bytes)
 - [x] Implement key scheduling / subkey derivation per block
-- [ ] Implement `xor_block(block, subkey)`
-- [ ] Implement `xnor_block(block, mask)`
-- [ ] Implement `bit_shift(block, amount)` (amount derived from subkey)
+- [x] Implement `xor_block(block, subkey)`
+- [x] Implement `xnor_block(block, mask)`
+- [x] Implement `bit_shift(block, amount)` (amount derived from subkey)
 - [ ] Chain into `layer1_encrypt(plaintext_bytes, key) -> ciphertext_bytes`
 - [ ] Implement exact reverse: `layer1_decrypt(ciphertext_bytes, key) -> plaintext_bytes`
 - [ ] Write `pytest` unit tests: round-trip test (`decrypt(encrypt(x)) == x`) on at least 20 varied inputs (empty string, 1 byte, exactly 1 block, multi-block, random binary data)

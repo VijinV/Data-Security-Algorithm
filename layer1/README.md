@@ -57,3 +57,53 @@ shift_0 = scheduler.get_shift_amount(block_index=0)
 # Direct derivation
 subkey_1 = derive_subkey(master_key, block_index=1, block_size=16)
 ```
+
+### Block XOR Operation (`layer1.operations`)
+- Performs bitwise XOR between a data block and its derived subkey.
+- Self-inverse (involution) property guarantees exact reversibility: `xor_block(xor_block(block, subkey), subkey) == block`.
+
+```python
+from layer1 import xor_block, derive_subkey
+
+# Encrypt block with subkey
+cipher_block = xor_block(block, subkey)
+
+# Decrypt block by reapplying XOR with same subkey
+recovered_block = xor_block(cipher_block, subkey)
+assert recovered_block == block
+```
+
+### Block XNOR Operation (`layer1.operations`)
+- Performs bitwise XNOR (NOT XOR) between a data block and its derived mask.
+- Adds cryptographic non-linearity / asymmetry compared to pure XOR systems.
+- Self-inverse (involution) property guarantees exact reversibility when reapplied with the same mask: `xnor_block(xnor_block(block, mask), mask) == block`.
+
+```python
+from layer1 import xnor_block, derive_mask
+
+# Apply XNOR with block mask
+masked_block = xnor_block(block, mask)
+
+# Revert XNOR by reapplying with identical mask
+original_block = xnor_block(masked_block, mask)
+assert original_block == block
+```
+
+### Block Circular Bit Shift (`layer1.operations`)
+- Performs deterministic circular bit rotation on binary blocks without bit loss.
+- Supports whole-block circular rotation (`mode="block"`, default) and per-byte rotation (`mode="byte"`).
+- Exact reversibility via `direction="right"`, negative amounts, or `reverse_bit_shift`.
+
+```python
+from layer1 import bit_shift, reverse_bit_shift, derive_shift_amount
+
+shift_amount = derive_shift_amount(master_key, block_index=0)
+
+# Rotate block left by derived shift amount
+shifted_block = bit_shift(block, shift_amount, direction="left")
+
+# Revert circular shift
+restored_block = reverse_bit_shift(shifted_block, shift_amount)
+# Or equivalently: bit_shift(shifted_block, shift_amount, direction="right")
+assert restored_block == block
+```

@@ -3,13 +3,13 @@ HelixLock API — Crypto router.
 
 Endpoints
 ---------
-POST /api/v1/encrypt          — encrypt raw bytes (JSON hex)
-POST /api/v1/decrypt          — decrypt raw bytes (JSON hex)
+POST /api/v1/encrypt          — encrypt text or raw bytes (JSON)
+POST /api/v1/decrypt          — decrypt to text and raw bytes (JSON)
 GET  /api/v1/generate-key     — generate a fresh CSPRNG key
 POST /api/v1/encrypt-file     — encrypt an uploaded file (multipart)
 POST /api/v1/decrypt-file     — decrypt an uploaded file (multipart)
 
-All binary data is exchanged as lowercase hex strings in JSON bodies.
+Text input uses UTF-8; binary data uses lowercase hex strings in JSON bodies.
 File endpoints stream raw bytes with Content-Type: application/octet-stream.
 The encryption key is returned / consumed via the X-HelixLock-Key-Hex header
 on file endpoints, keeping it out of the URL and response body.
@@ -94,16 +94,46 @@ def generate_key_endpoint(
 @router.post(
     "/encrypt",
     response_model=EncryptResponse,
-    summary="Encrypt plaintext bytes",
+    summary="Encrypt plain text or binary data",
     description=(
-        "Encrypts arbitrary binary data using the selected HelixLock layer. "
-        "Both plaintext and key are passed as **lowercase hex strings**. "
+        "Encrypts text or arbitrary binary data using the selected HelixLock layer. "
+        "Pass `plaintext` for normal text (encoded as UTF-8), or `plaintext_hex` "
+        "for hex-encoded bytes. Supply exactly one non-null input. "
+        "The key and returned ciphertext are **hex strings**. "
         "If `key_hex` is omitted, a fresh 256-bit key is generated automatically "
         "and returned in the response — **save it**, it cannot be recovered."
     ),
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "text": {
+                            "summary": "Encrypt normal text",
+                            "description": "Replace the example key_hex with your own hex key, or omit it to generate a fresh key.",
+                            "value": {"plaintext": "Hello world", "key_hex": "a1b2c3d4" * 8},
+                        },
+                        "hex": {
+                            "summary": "Encrypt binary data",
+                            "description": "Replace the example key_hex with your own hex key, or omit it to generate a fresh key.",
+                            "value": {"plaintext_hex": "48656c6c6f20776f726c64", "key_hex": "a1b2c3d4" * 8},
+                        },
+                    }
+                }
+            }
+        }
+    },
 )
 def encrypt_endpoint(body: EncryptRequest) -> EncryptResponse:
-    plaintext = bytes.fromhex(body.plaintext_hex)
+    if body.plaintext is not None:
+        try:
+            plaintext = body.plaintext.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise HTTPException(
+                status_code=422, detail="plaintext must be valid UTF-8 text"
+            ) from exc
+    else:
+        plaintext = bytes.fromhex(body.plaintext_hex)
 
     # Use the provided key or generate a fresh one
     if body.key_hex is not None:
@@ -136,6 +166,8 @@ def encrypt_endpoint(body: EncryptRequest) -> EncryptResponse:
     description=(
         "Decrypts ciphertext produced by `/encrypt`. "
         "Both ciphertext and key must be **lowercase hex strings**. "
+        "Returns `plaintext` as UTF-8 text (null for non-UTF-8 binary data) "
+        "and `plaintext_hex` for lossless access to the original bytes. "
         "Returns HTTP 422 if the ciphertext length is not a multiple of 16 bytes "
         "or if PKCS#7 padding validation fails (wrong key or corrupted data)."
     ),
@@ -153,7 +185,13 @@ def decrypt_endpoint(body: DecryptRequest) -> DecryptResponse:
             detail=f"Decryption failed — wrong key or corrupted ciphertext. ({exc})",
         ) from exc
 
+    try:
+        plaintext_text = plaintext.decode("utf-8")
+    except UnicodeDecodeError:
+        plaintext_text = None
+
     return DecryptResponse(
+        plaintext=plaintext_text,
         plaintext_hex=plaintext.hex(),
         layer=body.layer,
         plaintext_length_bytes=len(plaintext),

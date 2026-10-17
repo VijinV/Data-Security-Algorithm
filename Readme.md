@@ -107,6 +107,36 @@ crypro/
 
 ---
 
+## Encrypting text with the API
+
+Start the API with `uvicorn api.main:app --reload --port 8000` and open
+`http://localhost:8000/docs` to try the endpoints.
+
+Send `POST /api/v1/encrypt` with this JSON body:
+
+```json
+{
+  "plaintext": "Hello world",
+  "layer": "layer1"
+}
+```
+
+Text is encoded as UTF-8 automatically, including Unicode and emoji. The response
+contains `ciphertext_hex` and `key_hex`; keep the key to decrypt the result.
+You can also supply an existing `key_hex` when encrypting.
+
+Send the returned `ciphertext_hex` and `key_hex` to `POST /api/v1/decrypt`.
+The response includes readable `plaintext` and the original bytes as
+`plaintext_hex`. For binary content that is not valid UTF-8, `plaintext` is null
+and `plaintext_hex` still contains the full result.
+
+Existing binary clients can continue sending `plaintext_hex` instead of
+`plaintext`. Supply exactly one non-null input; empty text is supported.
+Values in `plaintext` are always treated as text, even when they look like hex.
+Keys and ciphertext remain hex-encoded.
+
+---
+
 ## 🛠️ Technology Stack
 
 | Component | Technology / Library | Purpose |

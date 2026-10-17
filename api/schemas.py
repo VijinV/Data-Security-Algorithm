@@ -10,7 +10,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Annotated
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -32,17 +32,24 @@ class EncryptRequest(BaseModel):
     """
     Request body for POST /api/v1/encrypt.
 
-    The plaintext and key are transmitted as hex strings so that arbitrary
-    binary data can be sent over a JSON API without base64 ambiguity.
+    Supply plaintext for UTF-8 text or plaintext_hex for arbitrary binary data.
+    Exactly one input must be non-null. Keys remain hex-encoded.
     """
 
-    plaintext_hex: Annotated[
-        str,
+    plaintext: Annotated[
+        str | None,
         Field(
-            description="Plaintext bytes encoded as a lowercase hex string (e.g. '48656c6c6f').",
+            description="Plain text to encrypt as UTF-8. Use either plaintext or plaintext_hex, not both.",
+            examples=["Hello world"],
+        ),
+    ] = None
+    plaintext_hex: Annotated[
+        str | None,
+        Field(
+            description="Binary plaintext encoded as hex. Leave null when using plaintext.",
             examples=["48656c6c6f2c20576f726c6421"],
         ),
-    ]
+    ] = None
     key_hex: Annotated[
         str,
         Field(
@@ -58,12 +65,20 @@ class EncryptRequest(BaseModel):
 
     @field_validator("plaintext_hex")
     @classmethod
-    def validate_plaintext_hex(cls, v: str) -> str:
+    def validate_plaintext_hex(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
         try:
             bytes.fromhex(v)
         except ValueError:
             raise ValueError("plaintext_hex must be a valid hex string")
         return v.lower()
+
+    @model_validator(mode="after")
+    def validate_plaintext_input(self) -> EncryptRequest:
+        if (self.plaintext is None) == (self.plaintext_hex is None):
+            raise ValueError("Provide exactly one of plaintext or plaintext_hex")
+        return self
 
     @field_validator("key_hex", mode="before")
     @classmethod
@@ -152,6 +167,10 @@ class DecryptRequest(BaseModel):
 class DecryptResponse(BaseModel):
     """Response body for POST /api/v1/decrypt."""
 
+    plaintext: str | None = Field(
+        default=None,
+        description="Recovered UTF-8 text, or null if the plaintext is not valid UTF-8."
+    )
     plaintext_hex: str = Field(
         description="Recovered plaintext bytes encoded as a lowercase hex string."
     )

@@ -3,6 +3,7 @@ pycryptodome>=3.18.0
 
 # Testing Framework
 pytest>=7.4.0
+httpx>=0.24.0  # FastAPI TestClient for API integration tests
 
 # Mathematical & Numerical Operations
 numpy>=1.24.0
